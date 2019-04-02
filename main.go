@@ -43,23 +43,23 @@ func main() {
 	client := getKubernetesClient()
 
 	// create the informer so that we can not only list resources
-	// but also watch them for all pods in the default namespace
+	// but also watch them for all events in the default namespace
 	informer := cache.NewSharedIndexInformer(
 		// the ListWatch contains two different functions that our
 		// informer requires: ListFunc to take care of listing and watching
 		// the resources we want to handle
 		&cache.ListWatch{
 			ListFunc: func(options meta_v1.ListOptions) (runtime.Object, error) {
-				// list all of the pods (core resource) in the deafult namespace
-				return client.CoreV1().Pods(meta_v1.NamespaceDefault).List(options)
+				// list all of the events (core resource) in the deafult namespace
+				return client.CoreV1().Events("").List(options)
 			},
 			WatchFunc: func(options meta_v1.ListOptions) (watch.Interface, error) {
-				// watch all of the pods (core resource) in the default namespace
-				return client.CoreV1().Pods(meta_v1.NamespaceDefault).Watch(options)
+				// watch all of the events (core resource) in the default namespace
+				return client.CoreV1().Events("").Watch(options)
 			},
 		},
-		&api_v1.Pod{}, // the target type (Pod)
-		0,             // no resync (period of 0)
+		&api_v1.Event{}, // the target type (Event)
+		0,               // no resync (period of 0)
 		cache.Indexers{},
 	)
 
@@ -77,28 +77,9 @@ func main() {
 			// convert the resource object into a key (in this case
 			// we are just doing it in the format of 'namespace/name')
 			key, err := cache.MetaNamespaceKeyFunc(obj)
-			log.Infof("Add pod: %s", key)
+			log.Infof("Add event: %s", key)
 			if err == nil {
 				// add the key to the queue for the handler to get
-				queue.Add(key)
-			}
-		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			key, err := cache.MetaNamespaceKeyFunc(newObj)
-			log.Infof("Update pod: %s", key)
-			if err == nil {
-				queue.Add(key)
-			}
-		},
-		DeleteFunc: func(obj interface{}) {
-			// DeletionHandlingMetaNamsespaceKeyFunc is a helper function that allows
-			// us to check the DeletedFinalStateUnknown existence in the event that
-			// a resource was deleted but it is still contained in the index
-			//
-			// this then in turn calls MetaNamespaceKeyFunc
-			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
-			log.Infof("Delete pod: %s", key)
-			if err == nil {
 				queue.Add(key)
 			}
 		},
@@ -112,7 +93,7 @@ func main() {
 		clientset: client,
 		informer:  informer,
 		queue:     queue,
-		handler:   &TestHandler{},
+		handler:   &TestHandler{client},
 	}
 
 	// use a channel to synchronize the finalization for a graceful shutdown
