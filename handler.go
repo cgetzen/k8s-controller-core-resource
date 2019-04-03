@@ -46,9 +46,12 @@ func (t *TestHandler) ObjectCreated(obj interface{}) {
 			creationTime := pod.ObjectMeta.CreationTimestamp
 			scheduleDuration := event.CreationTimestamp.Sub(creationTime.Time)
 			log.Infof("CHAR Scheduled time for pod %s/%s: %s", pod.Namespace, pod.Name, scheduleDuration)
-		// case "Pulling":
+		case "Pulling":
+			// Only send event when this is the first container
+			if isFirstContainer(event, t.client) {
+				mountTime(event, t.client)
+			}
 		case "Pulled":
-			containerName := strings.Split(event.InvolvedObject.FieldPath, "{")[1]
 			// If pulling happened, grab pull time, otherwise grab Mount time
 			if strings.Contains(event.Message, "Successfully pulled image") {
 				opts := meta_v1.ListOptions{
@@ -70,6 +73,7 @@ func (t *TestHandler) ObjectCreated(obj interface{}) {
 				}
 				pullingTime := pullingEvent.CreationTimestamp
 				pullingDuration := event.CreationTimestamp.Sub(pullingTime.Time)
+				containerName := strings.Split(event.InvolvedObject.FieldPath, "{")[1]
 				log.Infof("CHAR Pulled time for pod %s/%s{%s: %s",
 					event.InvolvedObject.Namespace,
 					event.InvolvedObject.Name,
@@ -78,47 +82,9 @@ func (t *TestHandler) ObjectCreated(obj interface{}) {
 				)
 			} else {
 				// Only send event when this is the first container
-				pod, err := t.client.CoreV1().Pods(event.InvolvedObject.Namespace).Get(event.InvolvedObject.Name, meta_v1.GetOptions{})
-				if err != nil {
-					return
-				}
-				firstContainer := pod.Spec.Containers[0].Name
-				if strings.Contains(containerName, firstContainer) {
-					// Grab Latest Mount Time
-					opts := meta_v1.ListOptions{
-						FieldSelector: fmt.Sprintf("involvedObject.name=%s,reason=SuccessfulMountVolume",
-							event.InvolvedObject.Name,
-						),
-					}
-					mountingEvents, err := t.client.CoreV1().Events(event.InvolvedObject.Namespace).List(opts)
-					if err != nil || len(mountingEvents.Items) == 0 {
-						return
-					}
-
-					latestMountTime := mountingEvents.Items[0].CreationTimestamp
-					for _, mountEvent := range mountingEvents.Items {
-						if mountEvent.CreationTimestamp.After(latestMountTime.Time) {
-							latestMountTime = mountEvent.CreationTimestamp
-						}
-					}
-					opts = meta_v1.ListOptions{
-						FieldSelector: fmt.Sprintf("involvedObject.name=%s,reason=Scheduled",
-							event.InvolvedObject.Name,
-						),
-					}
-					scheduledEvents, err := t.client.CoreV1().Events(event.InvolvedObject.Namespace).List(opts)
-					if err != nil || len(scheduledEvents.Items) != 1 {
-						return
-					}
-					scheduledTime := scheduledEvents.Items[0].CreationTimestamp
-					mountingDuration := latestMountTime.Sub(scheduledTime.Time)
-					log.Infof("CHAR Mount time for pod %s/%s: %s",
-						event.Namespace,
-						event.InvolvedObject.Name,
-						mountingDuration,
-					)
-				}
-
+				// if isFirstContainer(event, t.client) {
+				// 	mountTime(event, t.client)
+				// }
 			}
 			// case "Created":
 			// case "Started":
@@ -130,6 +96,55 @@ func (t *TestHandler) ObjectCreated(obj interface{}) {
 		// log.Infof("    Count: %d", event.Count)
 		// log.Infof("    Message: %s", event.Message)
 	}
+}
+
+func isFirstContainer(event *core_v1.Event, client kubernetes.Interface) bool {
+	pod, err := client.CoreV1().Pods(event.InvolvedObject.Namespace).Get(event.InvolvedObject.Name, meta_v1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	firstContainer := pod.Spec.Containers[0].Name
+	containerName := strings.Split(event.InvolvedObject.FieldPath, "{")[1]
+	if strings.Contains(containerName, firstContainer) {
+		return true
+	}
+	return false
+}
+
+func mountTime(event *core_v1.Event, client kubernetes.Interface) {
+	// Grab Latest Mount Time
+	opts := meta_v1.ListOptions{
+		FieldSelector: fmt.Sprintf("involvedObject.name=%s,reason=SuccessfulMountVolume",
+			event.InvolvedObject.Name,
+		),
+	}
+	mountingEvents, err := client.CoreV1().Events(event.InvolvedObject.Namespace).List(opts)
+	if err != nil || len(mountingEvents.Items) == 0 {
+		return
+	}
+
+	latestMountTime := mountingEvents.Items[0].CreationTimestamp
+	for _, mountEvent := range mountingEvents.Items {
+		if mountEvent.CreationTimestamp.After(latestMountTime.Time) {
+			latestMountTime = mountEvent.CreationTimestamp
+		}
+	}
+	opts = meta_v1.ListOptions{
+		FieldSelector: fmt.Sprintf("involvedObject.name=%s,reason=Scheduled",
+			event.InvolvedObject.Name,
+		),
+	}
+	scheduledEvents, err := client.CoreV1().Events(event.InvolvedObject.Namespace).List(opts)
+	if err != nil || len(scheduledEvents.Items) != 1 {
+		return
+	}
+	scheduledTime := scheduledEvents.Items[0].CreationTimestamp
+	mountingDuration := latestMountTime.Sub(scheduledTime.Time)
+	log.Infof("CHAR Mount time for pod %s/%s: %s",
+		event.Namespace,
+		event.InvolvedObject.Name,
+		mountingDuration,
+	)
 }
 
 // // ObjectDeleted is called when an object is deleted
